@@ -36,7 +36,7 @@ public class AuthorizeFilter implements Ordered, GlobalFilter {
 
         //4.判断token是否存在
         if(StringUtils.isBlank(token)){
-            response.setStatusCode(HttpStatus.UNAUTHORIZED);
+            response.setStatusCode(HttpStatus.UNAUTHORIZED);//校验失败
             return response.setComplete();
         }
 
