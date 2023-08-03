@@ -1,16 +1,21 @@
 package com.heima.wemedia.service.impl;
 import com.alibaba.fastjson.JSONArray;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.heima.apis.article.IArticleClient;
 import com.heima.common.aliyun.GreenImageScan;
 import com.heima.common.aliyun.GreenTextScan;
+import com.heima.common.test4j.Test4jClient;
 import com.heima.file.service.FileStorageService;
 import com.heima.model.article.dtos.ArticleDto;
 import com.heima.model.common.dtos.ResponseResult;
 import com.heima.model.wemedia.pojos.WmChannel;
 import com.heima.model.wemedia.pojos.WmNews;
+import com.heima.model.wemedia.pojos.WmSensitive;
 import com.heima.model.wemedia.pojos.WmUser;
+import com.heima.utils.common.SensitiveWordUtil;
 import com.heima.wemedia.mapper.WmChannelMapper;
 import com.heima.wemedia.mapper.WmNewsMapper;
+import com.heima.wemedia.mapper.WmSensitiveMapper;
 import com.heima.wemedia.mapper.WmUserMapper;
 import com.heima.wemedia.service.WmNewsAutoScanService;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +25,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -30,6 +38,8 @@ import java.util.stream.Collectors;
 public class WmNewsAutoScanServiceImpl implements WmNewsAutoScanService {
     @Autowired
     private WmNewsMapper wmNewsMapper;
+
+
 
     /**
      * 自媒体文章审核
@@ -47,6 +57,9 @@ public class WmNewsAutoScanServiceImpl implements WmNewsAutoScanService {
         if(wmNews.getStatus().equals(WmNews.Status.SUBMIT.getCode())){
             //从内容中提取纯文本内容和图片
             Map<String,Object> textAndImages = handleTextAndImages(wmNews);
+
+            //自管理的敏感词过滤
+            boolean isSensitive = handleSensitiveScan((String)textAndImages.get("content"),wmNews);
 
             //2.审核文本内容  阿里云接口
             boolean isTextScan = handleTextScan((String) textAndImages.get("content"),wmNews);
@@ -68,6 +81,35 @@ public class WmNewsAutoScanServiceImpl implements WmNewsAutoScanService {
         }
     }
 
+    @Autowired
+    private WmSensitiveMapper wmSensitiveMapper;
+
+    /**
+     * 自管理的敏感词审核
+     * @param content
+     * @param wmNews
+     * @return
+     */
+    private boolean handleSensitiveScan(String content, WmNews wmNews) {
+
+        boolean flag = true;
+
+        //获取所有的敏感词
+        List<WmSensitive> wmSensitives = wmSensitiveMapper.selectList(Wrappers.<WmSensitive>lambdaQuery().select(WmSensitive::getSensitives));
+        List<String> sensitiveList = wmSensitives.stream().map(WmSensitive::getSensitives).collect(Collectors.toList());
+
+        //初始化敏感词库
+        SensitiveWordUtil.initMap(sensitiveList);
+
+        //查看文章中是否包含敏感词
+        Map<String, Integer> map = SensitiveWordUtil.matchWords(content);
+        if(map.size() >0){
+            updateWmNews(wmNews,(short) 2,"当前文章中存在违规内容"+map);
+            flag = false;
+        }
+
+        return flag;
+    }
     @Autowired
     private IArticleClient articleClient;
 
@@ -119,6 +161,9 @@ public class WmNewsAutoScanServiceImpl implements WmNewsAutoScanService {
     @Autowired
     private GreenImageScan greenImageScan;
 
+    @Autowired
+    private Test4jClient test4jClient;
+
     /**
      * 审核图片
      * @param images
@@ -139,9 +184,32 @@ public class WmNewsAutoScanServiceImpl implements WmNewsAutoScanService {
 
         List<byte[]> imageList = new ArrayList<>();
 
-        for (String image : images) {
-            byte[] bytes = fileStorageService.downLoadFile(image);
-            imageList.add(bytes);
+        try {
+            for (String image : images) {
+                byte[] bytes = fileStorageService.downLoadFile(image);
+
+                //图片识别文字审核---begin-----
+
+                //从byte[]转换为butteredImage
+                ByteArrayInputStream in = new ByteArrayInputStream(bytes);
+                BufferedImage imageFile = ImageIO.read(in);
+                //识别图片的文字
+                String result = test4jClient.doOCR(imageFile);
+
+                //审核是否包含自管理的敏感词
+                boolean isSensitive = handleSensitiveScan(result, wmNews);
+                if(!isSensitive){
+                    return isSensitive;
+                }
+
+                //图片识别文字审核---end-----
+
+
+                imageList.add(bytes);
+
+            }
+        }catch (Exception e){
+            e.printStackTrace();
         }
 
 
@@ -261,4 +329,4 @@ public class WmNewsAutoScanServiceImpl implements WmNewsAutoScanService {
 
     }
 }
-}
+
