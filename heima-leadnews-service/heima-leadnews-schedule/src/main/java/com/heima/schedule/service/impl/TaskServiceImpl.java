@@ -1,6 +1,7 @@
 package com.heima.schedule.service.impl;
 
 
+import com.alibaba.cloud.commons.lang.StringUtils;
 import com.alibaba.fastjson.JSON;
 import com.heima.common.constants.ScheduleConstants;
 import com.heima.common.redis.CacheService;
@@ -111,5 +112,92 @@ public class TaskServiceImpl implements TaskService {
         }
 
         return flag;
+    }
+
+    /**
+     * 取消任务
+     * @param taskId
+     * @return
+     */
+    @Override
+    public boolean cancelTask(long taskId) {
+
+        boolean flag = false;
+
+        //删除任务，更新日志
+        Task task = updateDb(taskId,ScheduleConstants.EXECUTED);
+
+        //删除redis的数据
+        if(task != null){
+            removeTaskFromCache(task);
+            flag = true;
+        }
+
+
+
+        return false;
+    }
+
+    /**
+     * 删除redis中的任务数据
+     * @param task
+     */
+    private void removeTaskFromCache(Task task) {
+
+        String key = task.getTaskType()+"_"+task.getPriority();
+
+        if(task.getExecuteTime()<=System.currentTimeMillis()){
+            cacheService.lRemove(ScheduleConstants.TOPIC+key,0,JSON.toJSONString(task));
+        }else {
+            cacheService.zRemove(ScheduleConstants.FUTURE+key, JSON.toJSONString(task));
+        }
+    }
+
+    /**
+     * 删除任务，更新任务日志状态
+     * @param taskId
+     * @param status
+     * @return
+     */
+    private Task updateDb(long taskId, int status) {
+        Task task = null;
+        try {
+            //删除任务
+            taskinfoMapper.deleteById(taskId);
+
+            TaskinfoLogs taskinfoLogs = taskinfoLogsMapper.selectById(taskId);
+            taskinfoLogs.setStatus(status);
+            taskinfoLogsMapper.updateById(taskinfoLogs);
+
+            task = new Task();
+            BeanUtils.copyProperties(taskinfoLogs,task);
+            task.setExecuteTime(taskinfoLogs.getExecuteTime().getTime());
+        }catch (Exception e){
+            log.error("task cancel exception taskid={}",taskId);
+        }
+
+        return task;
+
+    }
+    /**
+     * 按照类型和优先级拉取任务
+     * @return
+     */
+    @Override
+    public Task poll(int type,int priority) {
+        Task task = null;
+        try {
+            String key = type+"_"+priority;
+            String task_json = cacheService.lRightPop(ScheduleConstants.TOPIC + key);
+            if(StringUtils.isNotBlank(task_json)){
+                task = JSON.parseObject(task_json, Task.class);
+                //更新数据库信息
+                updateDb(task.getTaskId(),ScheduleConstants.EXECUTED);
+            }
+        }catch (Exception e){
+            e.printStackTrace();
+            log.error("poll task exception");
+        }
+        return task;
     }
 }
