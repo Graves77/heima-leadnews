@@ -14,11 +14,13 @@ import com.heima.schedule.service.TaskService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Calendar;
 import java.util.Date;
+import java.util.Set;
 
 @Service
 @Transactional
@@ -199,5 +201,34 @@ public class TaskServiceImpl implements TaskService {
             log.error("poll task exception");
         }
         return task;
+    }
+
+    /**
+     * 定时刷新数据
+     */
+    @Scheduled(cron = "0 */1 * * * ?")
+    public void refresh(){
+
+        String token = cacheService.tryLock("FUTURE_TASK_SYNC", 1000 * 30);
+        if(StringUtils.isNotBlank(token)){
+            log.info("未来数据定时刷新---定时任务");
+
+            //获取所有未来数据的集合key
+            Set<String> futureKeys = cacheService.scan(ScheduleConstants.FUTURE + "*");
+            for (String futureKey : futureKeys) {//future_100_50
+
+                //获取当前数据的key  topic
+                String topicKey = ScheduleConstants.TOPIC+futureKey.split(ScheduleConstants.FUTURE)[1];
+
+                //按照key和分值查询符合条件的数据
+                Set<String> tasks = cacheService.zRangeByScore(futureKey, 0, System.currentTimeMillis());
+
+                //同步数据
+                if(!tasks.isEmpty()){
+                    cacheService.refreshWithPipeline(futureKey,topicKey,tasks);
+                    log.info("成功的将"+futureKey+"刷新到了"+topicKey);
+                }
+            }
+        }
     }
 }
