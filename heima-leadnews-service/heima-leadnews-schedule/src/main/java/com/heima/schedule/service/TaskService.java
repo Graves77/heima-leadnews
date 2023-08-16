@@ -28,4 +28,6 @@ public interface TaskService {
      * @return
      */
     public Task poll(int type,int priority);
+
+
 }

@@ -13,6 +13,7 @@
     <packaging>pom</packaging>
     <modules>
         <module>minio-demo</module>
+        <module>kafka-demo1</module>
     </modules>
 
     <properties>
